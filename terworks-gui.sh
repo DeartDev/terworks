@@ -592,6 +592,9 @@ cleanup() {
         ok "Servidor Termux:X11 detenido."
     fi
 
+    # 1b. Limpiar sockets y locks X11 para evitar "server already running".
+    rm -f /tmp/.X11-unix/X* /tmp/.X*-lock 2>/dev/null || true
+
     # 2. Detener PulseAudio.
     if pulseaudio --kill 2>/dev/null; then
         ok "PulseAudio detenido."
@@ -620,6 +623,11 @@ trap cleanup EXIT SIGTERM SIGINT SIGHUP
 pkill -f "termux-x11" 2>/dev/null || true
 pulseaudio --kill 2>/dev/null || true
 sleep 1
+
+# Eliminar sockets y locks X11 residuales que impiden re-iniciar el servidor.
+# Sin esto, termux-x11 falla con "server already running" aunque el proceso
+# ya no exista (el lock file persiste en /tmp).
+rm -f /tmp/.X11-unix/X* /tmp/.X*-lock 2>/dev/null || true
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Iniciar PulseAudio (TCP forwarding de audio)
@@ -727,6 +735,9 @@ pkill -f "xfce4-session" 2>/dev/null && ok "XFCE4 session terminada." || true
 
 # 2. Matar servidor Termux:X11 (por si el cleanup del launcher no corrió).
 pkill -f "termux-x11" 2>/dev/null && ok "Termux:X11 detenido." || true
+
+# 2b. Limpiar sockets y locks X11 residuales.
+rm -f /tmp/.X11-unix/X* /tmp/.X*-lock 2>/dev/null || true
 
 # 3. Detener PulseAudio.
 pulseaudio --kill 2>/dev/null && ok "PulseAudio detenido." || true
