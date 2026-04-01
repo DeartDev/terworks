@@ -350,6 +350,9 @@ fi
 
 if [ "$XFCE_EXISTS" = "true" ]; then
     print_success "XFCE4 ya está instalado en $DISTRO_LABEL."
+    # Asegurar que el cache de gdk-pixbuf esté actualizado (fix: GTK icon crash).
+    print_info "Actualizando cache de gdk-pixbuf..."
+    distro_exec_gui "gdk-pixbuf-query-loaders --update-cache 2>/dev/null || true"
 else
     print_info "Instalando XFCE4 + Firefox en $DISTRO_LABEL..."
     print_info "Esto puede tomar varios minutos (descarga de ~300-500 MB)."
@@ -362,13 +365,21 @@ else
     case "$DISTRO_ID" in
         debian|ubuntu)
             distro_exec_gui "$PKG_INSTALL xfce4 xfce4-goodies xfce4-terminal dbus-x11 \
-                firefox-esr fonts-noto-color-emoji fonts-liberation2 mesa-utils"
+                firefox-esr fonts-noto-color-emoji fonts-liberation2 mesa-utils \
+                librsvg2-common adwaita-icon-theme-full"
             ;;
         archlinux)
             distro_exec_gui "$PKG_INSTALL xfce4 xfce4-goodies xfce4-terminal dbus \
-                firefox noto-fonts-emoji ttf-liberation mesa-utils"
+                firefox noto-fonts-emoji ttf-liberation mesa-utils \
+                librsvg adwaita-icon-theme"
             ;;
     esac
+
+    # Reconstruir cache de gdk-pixbuf para que GTK reconozca formatos PNG/SVG.
+    # Sin esto, XFCE4 crashea con: "Failed to load image-missing.png:
+    # Unrecognized image file format (gdk-pixbuf-error-quark, 3)".
+    print_info "Reconstruyendo cache de gdk-pixbuf..."
+    distro_exec_gui "gdk-pixbuf-query-loaders --update-cache"
 
     print_success "XFCE4 + Firefox instalados en $DISTRO_LABEL."
 fi
@@ -640,6 +651,11 @@ if ! kill -0 "$X11_PID" 2>/dev/null; then
 fi
 ok "Termux:X11 iniciado en :1 (PID: $X11_PID)."
 
+# Abrir automáticamente la app Termux:X11 en Android.
+info "Abriendo app Termux:X11..."
+am start --user 0 -n com.termux.x11/.MainActivity 2>/dev/null || true
+sleep 1
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Lanzar XFCE4 dentro de la distro (BLOQUEANTE)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -655,7 +671,7 @@ ok "Termux:X11 iniciado en :1 (PID: $X11_PID)."
 echo ""
 echo -e "${BOLD}═══════════════════════════════════════════════════════════════${NC}"
 echo -e "  ${GREEN}Escritorio XFCE4 iniciando en $DISTRO...${NC}"
-echo -e "  Abre la app ${CYAN}Termux:X11${NC} en Android para ver el escritorio."
+echo -e "  La app ${CYAN}Termux:X11${NC} se abrirá automáticamente."
 echo -e "  Para cerrar: ${CYAN}Cerrar Sesión${NC} en XFCE, o ${CYAN}gui-stop${NC} en Termux."
 echo -e "${BOLD}═══════════════════════════════════════════════════════════════${NC}"
 echo ""
