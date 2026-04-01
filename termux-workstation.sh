@@ -950,8 +950,12 @@ echo ""
 #   • tailwindcss-language-server — Autocompletado de clases Tailwind.
 #   • vscode-langservers-extracted — HTML, CSS, JSON y ESLint LSPs (4 en 1).
 #   • intelephense              — PHP LSP premium (autocompletado, refactoring).
-#   • sql-language-server       — Autocompletado SQL para PostgreSQL.
 #   • bash-language-server      — Autocompletado y diagnósticos para scripts Bash.
+#
+# Nota: sql-language-server se excluye porque depende de sqlite3 (addon nativo
+# de C) que no tiene binarios precompilados para Android/arm64 y falla al
+# compilar con node-gyp en Termux (Python 3.13+ eliminó distutils).
+# Para SQL, Mason/LazyVim puede instalar 'sqls' (Go, sin deps nativas) al abrir .sql.
 #
 # Idempotencia:
 #   npm install -g no reinstala paquetes que ya están en la versión correcta.
@@ -965,7 +969,6 @@ npm install -g \
     tailwindcss-language-server \
     vscode-langservers-extracted \
     intelephense \
-    sql-language-server \
     bash-language-server
 
 print_success "Language Servers instalados globalmente."
