@@ -269,7 +269,15 @@ if distro_installed "$DISTRO_ID"; then
     esac
 else
     print_info "Instalando $DISTRO_LABEL (esto puede tomar varios minutos)..."
-    proot-distro install "$DISTRO_ID"
+    if ! proot-distro install "$DISTRO_ID"; then
+        print_error "La instalación de $DISTRO_LABEL falló (¿espacio en disco? ¿red?)."
+        exit 1
+    fi
+    # Verificar que el rootfs se creó correctamente.
+    if ! distro_installed "$DISTRO_ID"; then
+        print_error "El rootfs de $DISTRO_LABEL no se encontró después de la instalación."
+        exit 1
+    fi
     print_success "$DISTRO_LABEL instalada correctamente."
 fi
 

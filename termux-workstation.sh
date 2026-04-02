@@ -284,10 +284,19 @@ fi
 # al PATH global de Termux para usarlo como comando `composer`.
 if ! command_exists composer; then
     print_info "Instalando Composer (gestor de dependencias PHP)..."
-    curl -sS https://getcomposer.org/installer | php
-    mv composer.phar "$PREFIX/bin/composer"
-    chmod +x "$PREFIX/bin/composer"
-    print_success "Composer instalado."
+    # Descargar installer y verificar checksum antes de ejecutar.
+    # Esto evita ejecutar código comprometido en caso de MITM o alteración.
+    EXPECTED_CHECKSUM="$(curl -sSL https://composer.github.io/installer.sig)"
+    curl -sS https://getcomposer.org/installer -o /tmp/composer-setup.php
+    ACTUAL_CHECKSUM="$(php -r "echo hash_file('sha384', '/tmp/composer-setup.php');")"
+    if [ "$EXPECTED_CHECKSUM" != "$ACTUAL_CHECKSUM" ]; then
+        print_error "Checksum de Composer inválido. Instalación abortada por seguridad."
+        rm -f /tmp/composer-setup.php
+    else
+        php /tmp/composer-setup.php --install-dir="$PREFIX/bin" --filename=composer
+        rm -f /tmp/composer-setup.php
+        print_success "Composer instalado (checksum verificado)."
+    fi
 else
     print_success "Composer ya está instalado."
 fi
@@ -400,7 +409,10 @@ if [ ! -d "$PG_DATA" ] || [ -z "$(ls -A "$PG_DATA" 2>/dev/null)" ]; then
 
     print_info "Creando usuario '$pg_user' y base de datos '$pg_user'..."
     createuser --createdb --superuser "$pg_user" 2>/dev/null || true
-    psql -c "ALTER USER $pg_user WITH PASSWORD '$pg_pass';" postgres
+    # Escapar comillas simples en la contraseña para prevenir inyección SQL.
+    # PostgreSQL usa '' como escape de ' dentro de strings literales.
+    pg_pass_escaped="${pg_pass//\'/\'\'}" 
+    psql -c "ALTER USER $pg_user WITH PASSWORD '${pg_pass_escaped}';" postgres
     createdb -O "$pg_user" "$pg_user" 2>/dev/null || true
 
     pg_ctl -D "$PG_DATA" stop
