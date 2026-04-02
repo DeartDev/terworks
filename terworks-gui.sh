@@ -637,19 +637,21 @@ rm -f /tmp/.X11-unix/X* /tmp/.X*-lock 2>/dev/null || true
 # --exit-idle-time=-1 evita que PulseAudio se cierre por inactividad.
 info "Iniciando PulseAudio..."
 pulseaudio --start \
-    --load="module-native-protocol-tcp auth-ip-acl=127.0.0.1" \
+    --load="module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1" \
     --exit-idle-time=-1 2>/dev/null || true
 ok "PulseAudio iniciado (TCP :4713)."
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Iniciar servidor Termux:X11
 # ──────────────────────────────────────────────────────────────────────────────
-# termux-x11 crea el socket X11 en /tmp/.X11-unix/X1 y la distro accede
+# termux-x11 crea el socket X11 en /tmp/.X11-unix/X0 y la distro accede
 # a él via --shared-tmp. El flag -dpi ajusta la escala para la pantalla.
+# XDG_RUNTIME_DIR es necesario para que termux-x11 encuentre el runtime dir.
+export XDG_RUNTIME_DIR=${TMPDIR}
 info "Iniciando Termux:X11..."
-termux-x11 :1 -dpi "$DPI" &
+termux-x11 :0 -dpi "$DPI" >/dev/null &
 X11_PID=$!
-sleep 2
+sleep 3
 
 # Verificar que el servidor X11 arrancó correctamente.
 if ! kill -0 "$X11_PID" 2>/dev/null; then
@@ -657,11 +659,11 @@ if ! kill -0 "$X11_PID" 2>/dev/null; then
     err "Descárgala: https://github.com/termux/termux-x11/releases/tag/nightly"
     exit 1
 fi
-ok "Termux:X11 iniciado en :1 (PID: $X11_PID)."
+ok "Termux:X11 iniciado en :0 (PID: $X11_PID)."
 
 # Abrir automáticamente la app Termux:X11 en Android.
 info "Abriendo app Termux:X11..."
-am start --user 0 -n com.termux.x11/.MainActivity 2>/dev/null || true
+am start --user 0 -n com.termux.x11/com.termux.x11.MainActivity >/dev/null 2>&1 || true
 sleep 1
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -671,11 +673,12 @@ sleep 1
 # sesión en XFCE (logout), el comando retorna y se ejecuta cleanup().
 #
 # Variables de entorno pasadas a la distro:
-#   DISPLAY=:1              — Conecta al servidor Termux:X11.
-#   PULSE_SERVER=tcp:...    — Conecta al PulseAudio de Termux.
+#   DISPLAY=:0              — Conecta al servidor Termux:X11.
+#   PULSE_SERVER=127.0.0.1  — Conecta al PulseAudio de Termux (puerto default).
+#   XDG_RUNTIME_DIR         — Directorio temporal para runtime de sesión.
 #
-# dbus-launch inicia un bus de sesión necesario para XFCE.
-# --exit-with-session hace que dbus muera cuando XFCE muera.
+# startxfce4 es el wrapper oficial que configura dbus y el entorno
+# completo antes de lanzar xfce4-session. Más robusto que dbus-launch directo.
 echo ""
 echo -e "${BOLD}═══════════════════════════════════════════════════════════════${NC}"
 echo -e "  ${GREEN}Escritorio XFCE4 iniciando en $DISTRO...${NC}"
@@ -684,8 +687,8 @@ echo -e "  Para cerrar: ${CYAN}Cerrar Sesión${NC} en XFCE, o ${CYAN}gui-stop${N
 echo -e "${BOLD}═══════════════════════════════════════════════════════════════${NC}"
 echo ""
 
-proot-distro login "$DISTRO" --shared-tmp -- su - "$DISTRO_USER" -c \
-    "export DISPLAY=:1; export PULSE_SERVER=tcp:127.0.0.1:4713; dbus-launch --exit-with-session xfce4-session" \
+proot-distro login "$DISTRO" --shared-tmp -- /bin/bash -c \
+    "export PULSE_SERVER=127.0.0.1 && export XDG_RUNTIME_DIR=\${TMPDIR} && su - $DISTRO_USER -c 'env DISPLAY=:0 startxfce4'" \
     2>/dev/null || true
 
 # XFCE ha terminado — cleanup se ejecuta automáticamente via trap EXIT.
