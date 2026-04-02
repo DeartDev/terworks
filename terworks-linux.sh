@@ -116,9 +116,11 @@ distro_exec() {
 }
 
 # --- Verificar si la distro está instalada ---
+# Usa la existencia del directorio rootfs en lugar de parsear la salida de
+# 'proot-distro list', cuyo formato cambió entre versiones (antes usaba
+# "Alias: X / Installed: yes", ahora usa "* Name < alias >").
 distro_installed() {
-    proot-distro list 2>/dev/null | grep -q "Alias: $1" && \
-    proot-distro list 2>/dev/null | grep -A2 "Alias: $1" | grep -q "Installed: yes"
+    [ -d "$PREFIX/var/lib/proot-distro/installed-rootfs/$1" ]
 }
 
 

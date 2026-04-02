@@ -2,12 +2,13 @@
 
 > Mini Estación de Trabajo de Bolsillo para Desarrollo Full-Stack
 
-Dos scripts complementarios que transforman [Termux](https://termux.dev) en un entorno de desarrollo profesional completo:
+Tres scripts complementarios que transforman [Termux](https://termux.dev) en un entorno de desarrollo profesional completo:
 
 | Script | Propósito |
 |---|---|
 | **`termux-workstation.sh`** | Workstation nativa en Termux: stack PHP/Laravel + JS/React + PostgreSQL + Nginx, Neovim + LazyVim, Zsh + P10K, 16 temas de terminal |
 | **`terworks-linux.sh`** | Entorno Linux real (Debian/Ubuntu/Arch) via proot-distro con toolchain completo, Neovim + NvChad, AI tools (Opencode + Crush) |
+| **`terworks-gui.sh`** | Escritorio XFCE4 con Termux:X11, Firefox ESR y PulseAudio. Ciclo de vida completo: inicio → sesión XFCE → cleanup automático |
 
 ---
 
@@ -35,6 +36,15 @@ Dos scripts complementarios que transforman [Termux](https://termux.dev) en un e
 - [Herramientas AI](#herramientas-ai)
 - [Multi-Distro](#multi-distro)
 - [Pasos Post-Instalación Linux](#pasos-post-instalación-linux)
+
+### GUI (terworks-gui.sh)
+
+- [TerWorks GUI](#terworks-gui)
+- [Instalación de TerWorks GUI](#instalación-de-terworks-gui)
+- [Fases del Script GUI](#fases-del-script-gui)
+- [Aliases de TerWorks GUI](#aliases-de-terworks-gui)
+- [Ciclo de Vida del Escritorio](#ciclo-de-vida-del-escritorio)
+- [Pasos Post-Instalación GUI](#pasos-post-instalación-gui)
 
 ### General
 
@@ -679,9 +689,127 @@ cat ~/termux/.ssh/id_ed25519.pub  # Clave SSH
 
 ---
 
+## TerWorks GUI
+
+Script complementario que instala un **escritorio gráfico XFCE4** dentro de una distro Linux ya configurada por `terworks-linux.sh`, usando [Termux:X11](https://github.com/termux/termux-x11) como servidor de display nativo para Android.
+
+### ¿Por qué Termux:X11 + XFCE4?
+
+| Alternativa | Problema | Solución con Termux:X11 + XFCE4 |
+|---|---|---|
+| VNC | Latencia, compresión de imagen, app externa | Rendering nativo via X11, sin compresión |
+| GNOME / KDE | Demasiado pesado para proot (>1 GB RAM) | XFCE4 usa ~200-300 MB RAM |
+| Sin desktop (solo CLI) | No se pueden usar apps gráficas (Firefox, IDE) | Escritorio completo con panel, gestor de ventanas |
+
+### Instalación de TerWorks GUI
+
+> **Pre-requisito:** Ejecutar primero `terworks-linux.sh` para tener al menos una distro Linux instalada. También se necesita la APK de Termux:X11 (se descarga desde [GitHub Releases](https://github.com/termux/termux-x11/releases/tag/nightly)).
+
+#### Opción 1: Una línea
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DeartDev/termux_stack/main/terworks-gui.sh -o terworks-gui.sh && bash terworks-gui.sh
+```
+
+#### Opción 2: Desde el repositorio clonado
+
+```bash
+cd termux_stack
+bash terworks-gui.sh
+```
+
+### Fases del Script GUI
+
+El script se ejecuta en **9 fases** (0–8). Cada fase es idempotente.
+
+| Fase | Nombre | Qué Hace |
+|---|---|---|
+| **0** | Configuración Global | Modo estricto, trap de errores, funciones auxiliares + `distro_exec()` con `--shared-tmp` |
+| **1** | Banner y Validación | Verificar Termux, proot-distro instalado, al menos 1 distro Linux existente |
+| **2** | Paquetes Termux-side | Instalar `x11-repo`, `termux-x11-nightly`, `pulseaudio`. Verificar APK de Termux:X11 |
+| **3** | Selección de Distro | Menú con solo las distros instaladas. Detectar usuario. Auto-selección si hay solo una |
+| **4** | Instalar XFCE4 + Firefox | `xfce4`, `xfce4-goodies`, `xfce4-terminal`, `dbus-x11`, `firefox-esr`, fuentes, `mesa-utils` |
+| **5** | Generar Launcher | `~/.terworks/start-gui.sh` — orquesta PulseAudio → Termux:X11 → XFCE4 con cleanup automático |
+| **6** | Generar Stop Script | `~/.terworks/stop-gui.sh` — parada de emergencia desde otra sesión de Termux |
+| **7** | Aliases en Termux | Bloque `TERMUX-GUI START/END` en `~/.zshrc` con aliases `gui`, `gui-stop`, `gui-<distro>` |
+| **8** | Resumen Final | Componentes instalados, aliases, instrucciones de uso |
+
+### Aliases de TerWorks GUI
+
+Estos aliases se inyectan en `~/.zshrc` de Termux dentro del bloque `TERMUX-GUI START/END`:
+
+| Alias | Descripción |
+|---|---|
+| `gui` | Iniciar escritorio XFCE4 en la distro activa (`$TERWORKS_LINUX`) |
+| `gui-debian` | Iniciar escritorio en Debian |
+| `gui-ubuntu` | Iniciar escritorio en Ubuntu |
+| `gui-arch` | Iniciar escritorio en Arch Linux |
+| `gui-stop` | Detener escritorio desde otra sesión de Termux |
+
+> Solo aparecen los aliases `gui-<distro>` de las distros donde se ha ejecutado el script. Se preservan al re-ejecutar para otra distro.
+
+### Ciclo de Vida del Escritorio
+
+El launcher (`~/.terworks/start-gui.sh`) gestiona un ciclo de vida completo:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  1. Matar procesos residuales (idempotencia)            │
+│  2. Iniciar PulseAudio (TCP :4713)                      │
+│  3. Iniciar Termux:X11 (:0)                             │
+│  4. Abrir app Termux:X11 en Android                     │
+│  5. proot-distro login --shared-tmp (XFCE4)  ← BLOQUEA │
+│  ┆                                                      │
+│  ┆  Usuario trabaja en el escritorio...                  │
+│  ┆                                                      │
+│  6. XFCE termina (logout / gui-stop / crash)            │
+│  7. cleanup(): matar X11, PulseAudio, cerrar APK       │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Dos formas de cerrar:**
+
+| Método | Cómo | Cuándo Usarlo |
+|---|---|---|
+| **XFCE Logout** | Menú → Cerrar Sesión | Cierre normal (recomendado) |
+| **`gui-stop`** | Ejecutar desde otra sesión de Termux | XFCE congelado, pantalla negra, crash |
+
+### Pasos Post-Instalación GUI
+
+#### 1. Instalar la APK de Termux:X11
+
+Si aún no la tienes, descárgala de [GitHub Releases (nightly)](https://github.com/termux/termux-x11/releases/tag/nightly).
+Instala `app-arm64-v8a-debug.apk` (o `app-universal-debug.apk`).
+
+#### 2. Recargar Termux
+
+```bash
+source ~/.zshrc
+```
+
+#### 3. Iniciar el escritorio
+
+```bash
+# Iniciar en la distro activa
+gui
+
+# O en una distro específica
+gui-debian
+```
+
+#### 4. Abrir Termux:X11
+
+Al ejecutar `gui`, abre la app **Termux:X11** en Android para ver el escritorio.
+
+#### 5. Cerrar
+
+Desde XFCE: Menú → **Cerrar Sesión**. O desde otra sesión de Termux: `gui-stop`.
+
+---
+
 ## Idempotencia
 
-El script puede re-ejecutarse múltiples veces de forma segura:
+Los scripts pueden re-ejecutarse múltiples veces de forma segura:
 
 ### termux-workstation.sh
 
@@ -715,16 +843,35 @@ El script puede re-ejecutarse múltiples veces de forma segura:
 | **Aliases de distros previas** | Se preservan al re-ejecutar para una distro diferente |
 | **Symlink ~/termux** | Solo crea si no existe |
 
+### terworks-gui.sh
+
+| Componente | Estrategia |
+|---|---|
+| **x11-repo** | `pkg_installed` verifica antes de instalar |
+| **termux-x11-nightly / pulseaudio** | `ensure_pkg` verifica antes de instalar |
+| **XFCE4 + Firefox** | Busca `xfce4-session` en la distro antes de instalar |
+| **gdk-pixbuf cache** | Se regenera para evitar errores de íconos en XFCE |
+| **Launcher / Stop** | `~/.terworks/start-gui.sh` y `stop-gui.sh` se sobreescriben |
+| **Aliases en .zshrc** | Bloque `TERMUX-GUI START/END` se elimina y reescribe completo |
+| **Aliases de otras distros** | Se preservan al re-ejecutar para una distro diferente |
+| **Procesos residuales** | El launcher mata X11/PulseAudio antes de iniciar |
+
 ---
 
 ## Log y Depuración
 
-Toda la salida de los scripts se guarda automáticamente:
+Estos son los logs automáticos disponibles actualmente:
 
 | Script | Log |
 |---|---|
 | `termux-workstation.sh` | `~/.termux-ws-setup.log` |
 | `terworks-linux.sh` | `~/.terworks-linux-setup.log` |
+
+> `terworks-gui.sh` no genera un log dedicado en la versión actual. Si quieres log persistente, puedes ejecutar:
+
+```bash
+bash terworks-gui.sh 2>&1 | tee -a ~/.terworks-gui-setup.log
+```
 
 ```bash
 # Ver el log de la workstation
@@ -748,9 +895,12 @@ Después de la instalación, estos son los archivos y directorios creados o modi
 
 ```
 $HOME/
-├── .zshrc                          # Configuración de Zsh (aliases de WS + Linux)
+├── .zshrc                          # Configuración de Zsh (aliases de WS + Linux + GUI)
 ├── .termux-ws-setup.log            # Log de termux-workstation.sh
 ├── .terworks-linux-setup.log       # Log de terworks-linux.sh
+├── .terworks/
+│   ├── start-gui.sh                # Launcher del escritorio (generado por terworks-gui.sh)
+│   └── stop-gui.sh                 # Parada de emergencia del escritorio
 ├── .ssh/
 │   ├── id_ed25519                  # Llave privada SSH
 │   └── id_ed25519.pub              # Llave pública SSH
@@ -815,7 +965,7 @@ alias mi-proyecto="cd ~/www/mi-app && nvim ."
 alias deploy="npm run build && rsync -avz dist/ server:/var/www/"
 ```
 
-> Los aliases dentro del bloque `TERMUX-WS START/END` se sobreescriben al re-ejecutar `termux-workstation.sh`. Los del bloque `TERMUX-LINUX START/END` se sobreescriben al re-ejecutar `terworks-linux.sh`. Los aliases que estén fuera de ambos bloques se preservan siempre.
+> Los aliases dentro del bloque `TERMUX-WS START/END` se sobreescriben al re-ejecutar `termux-workstation.sh`. Los del bloque `TERMUX-LINUX START/END` se sobreescriben al re-ejecutar `terworks-linux.sh`. Los del bloque `TERMUX-GUI START/END` se sobreescriben al re-ejecutar `terworks-gui.sh`. Los aliases que estén fuera de estos bloques se preservan siempre.
 
 ### Agregar un tema de terminal personalizado
 
@@ -875,7 +1025,7 @@ No. Se registran pero no se inician al boot. Debes iniciarlos manualmente con `s
 
 ### ¿Cuánto espacio ocupa la instalación completa?
 
-Aproximadamente 1.5–2 GB para la workstation nativa (paquetes, LSPs, plugins de Neovim y Oh My Zsh). Si además instalas una distro Linux con `terworks-linux.sh`, suma 1–2 GB adicionales por distro.
+Aproximadamente 1.5–2 GB para la workstation nativa (paquetes, LSPs, plugins de Neovim y Oh My Zsh). Si además instalas una distro Linux con `terworks-linux.sh`, suma 1–2 GB adicionales por distro. El escritorio XFCE4 (`terworks-gui.sh`) agrega ~500 MB dentro de la distro.
 
 ### ¿Cómo desinstalo todo?
 
@@ -905,6 +1055,23 @@ sed -i '/TERMUX-LINUX START/,/TERMUX-LINUX END/d' ~/.zshrc
 rm -f ~/.terworks-linux-setup.log
 ```
 
+**Escritorio GUI (terworks-gui.sh):**
+```bash
+# Detener el escritorio si está corriendo
+gui-stop
+
+# Eliminar scripts generados
+rm -rf ~/.terworks
+
+# Eliminar aliases
+sed -i '/TERMUX-GUI START/,/TERMUX-GUI END/d' ~/.zshrc
+
+# Si generaste log manual con tee, opcionalmente elimínalo
+rm -f ~/.terworks-gui-setup.log
+
+# XFCE4 dentro de la distro se elimina al remover la distro
+```
+
 ### ¿Cómo actualizo los temas?
 
 ```bash
@@ -917,6 +1084,18 @@ rm -rf /tmp/themes
 ### ¿Puedo acceder al servidor web desde otro dispositivo en la red?
 
 Sí. Busca tu IP local con `myip` y accede desde otro dispositivo en la misma red WiFi: `http://<tu-ip>:8080`.
+
+### ¿El escritorio XFCE4 usa GPU?
+
+No. El rendering es por software (mesa-utils/swrast). Las aplicaciones 3D serán lentas, pero el escritorio, Firefox y apps normales funcionan bien. Esto es una limitación de proot (no tiene acceso a la GPU del dispositivo).
+
+### ¿Puedo usar el escritorio con audio?
+
+Sí. PulseAudio reenvía el audio desde la distro proot hacia Android via TCP (puerto 4713). Puede haber ~100ms de latencia, lo cual es normal.
+
+### ¿Qué hago si el escritorio se congela?
+
+Abre otra sesión de Termux y ejecuta `gui-stop`. Esto mata todos los procesos del escritorio (XFCE, Termux:X11, PulseAudio) y cierra la app de Termux:X11.
 
 Para Laravel: `serve` ya usa `--host=0.0.0.0`, así que es accesible en `http://<tu-ip>:8000`.
 

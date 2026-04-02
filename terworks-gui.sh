@@ -1,10 +1,52 @@
 #!/usr/bin/env bash
-# TERWORKS GUI v2.0.0 — Escritorio XFCE4 con Termux:X11
 
+# ==============================================================================
+#  TERWORKS GUI v2.0.0
+#  Escritorio Linux XFCE4 en Termux con Termux:X11
+# ==============================================================================
+#  Distro    : Debian · Ubuntu · Arch Linux (via proot-distro)
+#  Escritorio: XFCE4 + xfce4-goodies + xfce4-terminal
+#  Navegador : Firefox (ESR en Debian/Ubuntu, estable en Arch)
+#  Audio     : PulseAudio por TCP (forwarding 127.0.0.1:4713)
+#  Display   : Servidor X11 en Android con Termux:X11
+# ------------------------------------------------------------------------------
+#  Objetivo:
+#  Convertir una distro Linux instalada por terworks-linux.sh en un entorno
+#  gráfico completo, usable desde Android, con aliases de arranque/parada y
+#  soporte multi-distro.
+#
+#  Complementario a:
+#    • termux-workstation.sh — Entorno CLI de desarrollo en Termux.
+#    • terworks-linux.sh     — Provisioning de distros Linux en proot.
+#
+#  Flujo de alto nivel:
+#    1) Validar Termux + proot-distro + distros instaladas.
+#    2) Preparar stack gráfico en Termux (x11-repo, termux-x11, pulseaudio).
+#    3) Instalar XFCE4 + Firefox dentro de la distro seleccionada.
+#    4) Generar launchers idempotentes: ~/.terworks/start-gui.sh y stop-gui.sh.
+#    5) Inyectar aliases en ~/.zshrc (bloque TERMUX-GUI).
+#
+#  Notas técnicas:
+#    • proot no provee systemd real: sesión XFCE se ejecuta en primer plano.
+#    • Termux:X11 corre en Android; la distro exporta DISPLAY=:0.
+#    • PulseAudio se publica por TCP local para audio de apps Linux.
+#
+#  Uso:
+#    chmod +x terworks-gui.sh
+#    bash terworks-gui.sh
+# ==============================================================================
+
+# --- Modo estricto ---
+# -e: detiene al primer error.
+# -u: falla si se usa una variable no definida.
+# -o pipefail: un error en cualquier parte de un pipe falla toda la tubería.
 set -euo pipefail
+
+# --- Trap de errores ---
+# Muestra la línea exacta para depuración rápida y reproducible.
 trap 'echo -e "\n\033[0;31m[FATAL] Error en línea $LINENO\033[0m"; exit 1' ERR
 
-# --- Colores y funciones ---
+# --- Colores y funciones de salida ---
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
@@ -15,18 +57,25 @@ err()     { echo -e "${RED}[ERROR]${NC} $1"; }
 
 pkg_installed() { dpkg -s "$1" > /dev/null 2>&1; }
 
+# Instala un paquete de Termux solo si no está presente (idempotencia).
 ensure_pkg() {
     if pkg_installed "$1"; then ok "$1 ya instalado."
     else info "Instalando: $1..."; pkg install -y "$1"
     fi
 }
 
+# Ejecuta un comando dentro de la distro elegida como root proot.
+# --shared-tmp permite compartir /tmp entre Termux y la distro.
 distro_exec() { proot-distro login "$DISTRO_ID" --shared-tmp -- bash -c "$1"; }
+
+# Detección robusta de rootfs instalado (evita parsear proot-distro list).
 distro_installed() { [ -d "$PREFIX/var/lib/proot-distro/installed-rootfs/$1" ]; }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BANNER Y VALIDACIÓN
+# FASE 1: BANNER Y VALIDACIÓN DE ENTORNO
 # ══════════════════════════════════════════════════════════════════════════════
+# Comprueba que el script corre en Termux, que proot-distro está disponible
+# y que existe al menos una distro Linux instalada para poder provisionar GUI.
 
 clear
 echo -e "${CYAN}${BOLD}"
@@ -43,15 +92,17 @@ echo -e "${NC}"
 info "Iniciando configuración — $(date '+%Y-%m-%d %H:%M:%S')"
 echo ""
 
-# Validar entorno Termux.
+# --- Paso 1.1: Validar entorno Termux ---
 if [ ! -d "$PREFIX" ] || ! command -v pkg &>/dev/null; then
     err "Este script debe ejecutarse dentro de Termux."; exit 1
 fi
+
+# --- Paso 1.2: Verificar proot-distro ---
 if ! command -v proot-distro &>/dev/null; then
     err "proot-distro no instalado. Ejecuta primero: bash terworks-linux.sh"; exit 1
 fi
 
-# Detectar distros instaladas.
+# --- Paso 1.3: Detectar distros instaladas ---
 INSTALLED_DISTROS=""
 for d in debian ubuntu archlinux; do
     distro_installed "$d" && INSTALLED_DISTROS="$INSTALLED_DISTROS $d"
@@ -64,12 +115,17 @@ ok "Pre-requisitos verificados."
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PAQUETES TERMUX (x11-repo, termux-x11-nightly, pulseaudio)
+# FASE 2: STACK GRÁFICO EN TERMUX
 # ══════════════════════════════════════════════════════════════════════════════
+# Instala dependencias del host Termux (no de la distro):
+#   • x11-repo            → repositorio de paquetes X11.
+#   • termux-x11-nightly  → servidor/display bridge para Android.
+#   • pulseaudio          → forwarding de audio para apps Linux.
 
 info "Instalando componentes gráficos en Termux..."
 echo ""
 
+# --- Paso 2.1: Habilitar x11-repo si falta ---
 if ! pkg_installed "x11-repo"; then
     info "Habilitando repositorio x11..."
     pkg install -y x11-repo
@@ -78,11 +134,13 @@ else
     ok "Repositorio x11 ya habilitado."
 fi
 
+# --- Paso 2.2: Instalar componentes base del stack gráfico ---
 ensure_pkg termux-x11-nightly
 ensure_pkg pulseaudio
 echo ""
 
-# Verificar APK de Termux:X11.
+# --- Paso 2.3: Verificar APK Android de Termux:X11 ---
+# El binario CLI no garantiza que la app Android esté instalada.
 APK_INSTALLED=true
 if ! pm list packages 2>/dev/null | grep -q "com.termux.x11"; then
     APK_INSTALLED=false
@@ -99,8 +157,10 @@ ok "Componentes gráficos de Termux listos."
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SELECCIÓN DE DISTRIBUCIÓN
+# FASE 3: SELECCIÓN DE DISTRIBUCIÓN DESTINO
 # ══════════════════════════════════════════════════════════════════════════════
+# Presenta únicamente distros ya instaladas por terworks-linux.sh.
+# Esto permite un flujo multi-distro sin reinstalar rootfs.
 
 echo -e "${CYAN}${BOLD}═══ Selección de Distribución para el Escritorio ═════════════${NC}"
 echo ""
@@ -138,7 +198,7 @@ else
     done
 fi
 
-# Comandos de paquetes según distro.
+# --- Paso 3.1: Definir comandos de paquetes por distro ---
 case "$DISTRO_ID" in
     debian|ubuntu)
         PKG_UPDATE="export DEBIAN_FRONTEND=noninteractive && apt-get update -y && apt-get upgrade -y"
@@ -148,11 +208,13 @@ case "$DISTRO_ID" in
         PKG_INSTALL="pacman -S --noconfirm" ;;
 esac
 
+# Alias amigable para comandos de usuario (archlinux -> arch).
 case "$DISTRO_ID" in
     archlinux) DISTRO_ALIAS="arch" ;;
     *)         DISTRO_ALIAS="$DISTRO_ID" ;;
 esac
 
+# Detectar usuario no-root principal (UID >= 1000), fallback a dev.
 DISTRO_USER=$(distro_exec "awk -F: '\$3 >= 1000 && \$3 < 65534 {print \$1; exit}' /etc/passwd" 2>/dev/null || echo "dev")
 
 echo ""
@@ -160,8 +222,12 @@ info "Distro: $DISTRO_LABEL ($DISTRO_ID) | Usuario: $DISTRO_USER"
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════════════
-# INSTALACIÓN DE XFCE4 + FIREFOX EN LA DISTRO
+# FASE 4: INSTALACIÓN DE XFCE4 + FIREFOX EN LA DISTRO
 # ══════════════════════════════════════════════════════════════════════════════
+# Esta fase instala el escritorio completo dentro de la distro elegida.
+# Idempotencia:
+#   • Si xfce4-session existe, no reinstala todo.
+#   • Siempre regenera cache de gdk-pixbuf para evitar crash de iconos.
 
 info "Verificando XFCE4 en $DISTRO_LABEL..."
 
@@ -184,7 +250,8 @@ else
                 librsvg adwaita-icon-theme" ;;
     esac
 
-    # Fix: sin esto XFCE crashea con "Failed to load image-missing.png".
+    # Fix crítico: sin este cache, XFCE puede fallar con
+    # "Failed to load image-missing.png" en algunos rootfs proot.
     info "Reconstruyendo cache de gdk-pixbuf..."
     distro_exec "gdk-pixbuf-query-loaders --update-cache"
 
@@ -193,7 +260,7 @@ fi
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════════════
-# GENERACIÓN DE start-gui.sh (LAUNCHER)
+# FASE 5: GENERACIÓN DE STARTER GRÁFICO (start-gui.sh)
 # ══════════════════════════════════════════════════════════════════════════════
 # Orquesta: cleanup residual → PulseAudio → Termux:X11 → XFCE4 (bloqueante)
 # Al terminar XFCE, cleanup automático via trap EXIT.
@@ -205,6 +272,15 @@ mkdir -p "$TERWORKS_DIR"
 cat > "$TERWORKS_DIR/start-gui.sh" << 'LAUNCHEREOF'
 #!/usr/bin/env bash
 # TerWorks GUI Launcher — Generado por terworks-gui.sh
+# ------------------------------------------------------------------------------
+# Flujo interno:
+#   1) Resolver distro/usuario activos.
+#   2) Limpiar residuos previos (X11 locks, procesos huérfanos).
+#   3) Levantar PulseAudio TCP local.
+#   4) Levantar Termux:X11 y abrir su Activity Android.
+#   5) Ejecutar XFCE4 dentro de proot con DISPLAY=:0.
+#   6) Al salir, limpiar todo automáticamente via trap.
+# ------------------------------------------------------------------------------
 set -uo pipefail
 
 CYAN='\033[0;36m'; GREEN='\033[0;32m'; RED='\033[0;31m'
@@ -230,7 +306,8 @@ fi
 
 info "Distro: $DISTRO | Usuario: $DISTRO_USER"
 
-# --- Cleanup ---
+# --- Cleanup global ---
+# Se ejecuta en EXIT/SIGINT/SIGTERM/SIGHUP para dejar el entorno limpio.
 CLEANUP_DONE=false
 cleanup() {
     [ "$CLEANUP_DONE" = "true" ] && return
@@ -250,20 +327,20 @@ cleanup() {
 }
 trap cleanup EXIT SIGTERM SIGINT SIGHUP
 
-# --- Matar procesos residuales ---
+# --- Paso A: matar procesos residuales ---
 pkill -f "termux-x11" 2>/dev/null || true
 pulseaudio --kill 2>/dev/null || true
 sleep 1
 rm -f /tmp/.X11-unix/X* /tmp/.X*-lock 2>/dev/null || true
 
-# --- PulseAudio (TCP audio forwarding) ---
+# --- Paso B: PulseAudio (audio forwarding por TCP local) ---
 info "Iniciando PulseAudio..."
 pulseaudio --start \
     --load="module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1" \
     --exit-idle-time=-1 2>/dev/null || true
 ok "PulseAudio iniciado (TCP :4713)."
 
-# --- Termux:X11 ---
+# --- Paso C: Termux:X11 ---
 export XDG_RUNTIME_DIR=${TMPDIR}
 info "Iniciando Termux:X11..."
 termux-x11 :0 >/dev/null &
@@ -281,7 +358,8 @@ ok "Termux:X11 iniciado en :0 (PID: $X11_PID)."
 am start --user 0 -n com.termux.x11/com.termux.x11.MainActivity >/dev/null 2>&1 || true
 sleep 1
 
-# --- Lanzar XFCE4 (BLOQUEANTE) ---
+# --- Paso D: Lanzar XFCE4 (bloqueante) ---
+# La sesión queda en primer plano; al cerrarla retorna aquí y dispara cleanup.
 echo ""
 echo -e "${BOLD}═══════════════════════════════════════════════════════════════${NC}"
 echo -e "  ${GREEN}Escritorio XFCE4 iniciando en $DISTRO...${NC}"
@@ -299,14 +377,17 @@ ok "Launcher generado: ~/.terworks/start-gui.sh"
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════════════
-# GENERACIÓN DE stop-gui.sh
+# FASE 6: GENERACIÓN DE STOPPER (stop-gui.sh)
 # ══════════════════════════════════════════════════════════════════════════════
+# Script complementario para apagar manualmente el stack gráfico sin entrar
+# al menú de XFCE (útil cuando la app Android queda en background o congelada).
 
 info "Generando script de parada..."
 
 cat > "$TERWORKS_DIR/stop-gui.sh" << 'STOPEOF'
 #!/usr/bin/env bash
 # TerWorks GUI Stop — Generado por terworks-gui.sh
+# Detiene sesión gráfica, servidor X11, locks y audio.
 GREEN='\033[0;32m'; CYAN='\033[0;36m'; NC='\033[0m'
 ok() { echo -e "${GREEN}[GUI]${NC} $1"; }
 
@@ -328,8 +409,12 @@ ok "Script de parada: ~/.terworks/stop-gui.sh"
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ALIASES EN .zshrc (bloque TERMUX-GUI)
+# FASE 7: INYECCIÓN DE ALIASES EN .zshrc (bloque TERMUX-GUI)
 # ══════════════════════════════════════════════════════════════════════════════
+# Estrategia idéntica a los demás scripts:
+#   • marcador START/END dedicado;
+#   • limpieza y reescritura idempotente;
+#   • preservación de aliases GUI de otras distros.
 
 info "Configurando aliases en .zshrc..."
 
@@ -339,7 +424,7 @@ ZSHRC="$HOME/.zshrc"
 
 [ ! -f "$ZSHRC" ] && touch "$ZSHRC"
 
-# Preservar aliases de otras distros antes de limpiar el bloque.
+# Preservar aliases de otras distros antes de limpiar el bloque actual.
 EXISTING_GUI_ALIASES=""
 if grep -q "$MARKER_START" "$ZSHRC" 2>/dev/null; then
     EXISTING_GUI_ALIASES=$(sed -n "/$MARKER_START/,/$MARKER_END/p" "$ZSHRC" \
@@ -367,7 +452,7 @@ ok "Aliases inyectados en ~/.zshrc (bloque TERMUX-GUI)."
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════════════
-# RESUMEN FINAL
+# FASE 8: RESUMEN FINAL E INSTRUCCIONES DE USO
 # ══════════════════════════════════════════════════════════════════════════════
 
 echo -e "${CYAN}${BOLD}"
